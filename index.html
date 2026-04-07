@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>水滴物理模拟</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background: #1a1a2e;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            display: block;
+            cursor: crosshair;
+        }
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        #controls h3 {
+            margin-bottom: 8px;
+            font-size: 16px;
+        }
+        .control-item {
+            margin: 5px 0;
+        }
+        button {
+            background: #0f3460;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            margin-right: 5px;
+        }
+        button:hover {
+            background: #16537e;
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <h3>水滴物理模拟</h3>
+        <div class="control-item">点击屏幕产生雨滴</div>
+        <div class="control-item">
+            <button id="mode-lotus">荷叶模式</button>
+            <button id="mode-water">水面模式</button>
+            <button id="mode-soil">土壤模式</button>
+        </div>
+        <div class="control-item">模式：<span id="current-mode">荷叶</span></div>
+    </div>
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // 设置画布尺寸
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+
+        // 物理参数
+        const gravity = 0.5;
+        const friction = 0.99;
+
+        // 水滴类
+        class Drop {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.vx = (Math.random() - 0.5) * 2;
+                this.vy = Math.random() * 3 + 2;
+                this.radius = Math.random() * 3 + 2;
+                this.mass = this.radius * this.radius;
+                this.stuck = false;
+                this.absorbed = false;
+                this.mergeProgress = 0;
+                this.targetX = 0;
+                this.targetY = 0;
+            }
+
+            update(surfaceType) {
+                if (this.stuck || this.absorbed) return;
+
+                // 应用重力
+                this.vy += gravity;
+                this.vx *= friction;
+                this.vy *= friction;
+
+                // 更新位置
+                this.x += this.vx;
+                this.y += this.vy;
+
+                // 边界检查
+                if (this.x < 0 || this.x > canvas.width) {
+                    this.vx *= -0.5;
+                }
+
+                // 碰撞检测根据不同表面类型处理
+                if (surfaceType === 'lotus') {
+                    this.checkLotusCollision();
+                } else if (surfaceType === 'water') {
+                    this.checkWaterCollision();
+                } else if (surfaceType === 'soil') {
+                    this.checkSoilCollision();
+                }
+            }
+
+            checkLotusCollision() {
+                // 荷叶是疏水表面，水滴会滚落
+                if (this.y > canvas.height * 0.6 - this.radius) {
+                    // 计算表面坡度（模拟荷叶弧形）
+                    const surfaceY = canvas.height * 0.6 + 5 * Math.sin(this.x * 0.01);
+                    if (this.y > surfaceY - this.radius) {
+                        this.y = surfaceY - this.radius;
+                        // 反弹系数小，因为疏水，水滴保持形状滚动
+                        this.vy = -this.vy * 0.3;
+                        // 根据位置增加横向速度（滚落）
+                        this.vx += 0.1 * Math.sin(this.x * 0.01);
+                        this.radius += 0.1; // 稍微聚合变大
+                    }
+                }
+            }
+
+            checkWaterCollision() {
+                // 水面：水滴撞击后产生涟漪并融入
+                if (this.y > canvas.height * 0.6 - this.radius) {
+                    this.stuck = true;
+                    // 添加涟漪
+                    ripples.push(new Ripple(this.x, canvas.height * 0.6, this.radius * 2));
+                    setTimeout(() => {
+                        this.absorbed = true;
+                    }, 500);
+                }
+            }
+
+            checkSoilCollision() {
+                // 土壤：水滴被吸收，土壤变湿
+                if (this.y > canvas.height * 0.6 - this.radius) {
+                    this.absorbed = true;
+                    // 增加湿润度
+                    wetness.addWet(this.x, this.y, this.radius * 2);
+                }
+            }
+
+            draw() {
+                if (this.absorbed) return;
+
+                ctx.beginPath();
+                // 水滴颜色：透明度随半径变化，大水滴更透明
+                const alpha = this.stuck ? 0.7 : 0.8;
+                ctx.fillStyle = `rgba(100, 180, 255, ${alpha})`;
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // 高光
+                ctx.beginPath();
+                ctx.fillStyle = `rgba(255, 255, 255, 0.6)`;
+                ctx.arc(this.x - this.radius * 0.3, this.y - this.radius * 0.3, this.radius * 0.4, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            merge(other) {
+                // 水滴合并
+                const dx = other.x - this.x;
+                const dy = other.y - this.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < this.radius + other.radius && dist > 0) {
+                    // 质量守恒合并
+                    const newMass = this.mass + other.mass;
+                    const newRadius = Math.sqrt(newMass);
+                    // 位置加权平均
+                    this.x = (this.x * this.mass + other.x * other.mass) / newMass;
+                    this.y = (this.y * this.mass + other.y * other.mass) / newMass;
+                    this.radius = newRadius;
+                    this.mass = newMass;
+                    other.absorbed = true;
+                    return true;
+                }
+                return false;
+            }
+        }
+
+        // 涟漪类（水面效果）
+        class Ripple {
+            constructor(x, y, maxRadius) {
+                this.x = x;
+                this.y = y;
+                this.radius = 0;
+                this.maxRadius = maxRadius;
+                this.opacity = 1;
+                this.speed = 2;
+            }
+
+            update() {
+                this.radius += this.speed;
+                this.opacity = 1 - (this.radius / this.maxRadius);
+                return this.radius < this.maxRadius;
+            }
+
+            draw() {
+                ctx.beginPath();
+                ctx.strokeStyle = `rgba(100, 180, 255, ${this.opacity * 0.6})`;
+                ctx.lineWidth = 2;
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+        }
+
+        // 湿润度管理（土壤效果）
+        class Wetness {
+            constructor(width, height, cellSize) {
+                this.cellSize = cellSize || 5;
+                this.cols = Math.ceil(width / cellSize);
+                this.rows = Math.ceil(height / cellSize);
+                this.grid = new Array(this.cols * this.rows).fill(0);
+                this.width = width;
+                this.height = height;
+            }
+
+            addWet(x, y, radius) {
+                const startCol = Math.max(0, Math.floor((x - radius) / this.cellSize));
+                const endCol = Math.min(this.cols - 1, Math.ceil((x + radius) / this.cellSize));
+                const startRow = Math.max(0, Math.floor((y - radius) / this.cellSize));
+                const endRow = Math.min(this.rows - 1, Math.ceil((y + radius) / this.cellSize));
+
+                for (let col = startCol; col <= endCol; col++) {
+                    for (let row = startRow; row <= endRow; row++) {
+                        const px = col * this.cellSize + this.cellSize / 2;
+                        const py = row * this.cellSize + this.cellSize / 2;
+                        const dist = Math.sqrt((px - x) ** 2 + (py - y) ** 2);
+                        if (dist < radius) {
+                            const index = row * this.cols + col;
+                            this.grid[index] += (1 - dist / radius) * 0.3;
+                            if (this.grid[index] > 1) this.grid[index] = 1;
+                        }
+                    }
+                }
+            }
+
+            draw(surfaceY) {
+                for (let col = 0; col < this.cols; col++) {
+                    for (let row = Math.floor(surfaceY / this.cellSize); row < this.rows; row++) {
+                        const wet = this.grid[row * this.cols + col];
+                        if (wet > 0) {
+                            const x = col * this.cellSize;
+                            const y = row * this.cellSize;
+                            const alpha = wet * 0.4;
+                            ctx.fillStyle = `rgba(80, 50, 20, ${alpha})`;
+                            ctx.fillRect(x, y, this.cellSize, this.cellSize);
+                        }
+                    }
+                }
+            }
+
+            clear() {
+                this.grid.fill(0);
+            }
+        }
+
+        // 状态变量
+        let drops = [];
+        let ripples = [];
+        let surfaceType = 'lotus';
+        let wetness = new Wetness(canvas.width, canvas.height - canvas.height * 0.6, 4);
+
+        // 按钮事件
+        document.getElementById('mode-lotus').addEventListener('click', () => {
+            surfaceType = 'lotus';
+            document.getElementById('current-mode').textContent = '荷叶';
+            drops = [];
+            ripples = [];
+            wetness.clear();
+        });
+        document.getElementById('mode-water').addEventListener('click', () => {
+            surfaceType = 'water';
+            document.getElementById('current-mode').textContent = '水面';
+            drops = [];
+            ripples = [];
+            wetness.clear();
+        });
+        document.getElementById('mode-soil').addEventListener('click', () => {
+            surfaceType = 'soil';
+            document.getElementById('current-mode').textContent = '土壤';
+            drops = [];
+            ripples = [];
+            wetness.clear();
+        });
+
+        // 点击产生雨滴
+        canvas.addEventListener('click', (e) => {
+            for (let i = 0; i < 5; i++) {
+                drops.push(new Drop(e.clientX + (Math.random() - 0.5) * 20, e.clientY - 50));
+            }
+        });
+
+        // 自动连续下雨
+        let autoRain = false;
+        canvas.addEventListener('mousedown', () => autoRain = true);
+        canvas.addEventListener('mouseup', () => autoRain = false);
+        canvas.addEventListener('mouseleave', () => autoRain = false);
+
+        // 动画循环
+        function animate() {
+            // 清空画布
+            ctx.fillStyle = '#87CEEB';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 自动下雨
+            if (autoRain) {
+                const x = Math.random() * canvas.width;
+                drops.push(new Drop(x, 0));
+            }
+
+            // 绘制背景表面
+            const surfaceY = canvas.height * 0.6;
+            if (surfaceType === 'lotus') {
+                // 荷叶背景
+                ctx.fillStyle = '#2d882d';
+                ctx.beginPath();
+                ctx.moveTo(0, surfaceY);
+                for (let x = 0; x < canvas.width; x += 10) {
+                    const y = surfaceY + 5 * Math.sin(x * 0.01);
+                    ctx.lineTo(x, y);
+                }
+                ctx.lineTo(canvas.width, canvas.height);
+                ctx.lineTo(0, canvas.height);
+                ctx.closePath();
+                ctx.fill();
+
+                // 荷叶纹理
+                ctx.strokeStyle = '#1f5c1f';
+                ctx.lineWidth = 1;
+                for (let i = 0; i < 10; i++) {
+                    ctx.beginPath();
+                    ctx.moveTo(canvas.width * 0.2 + i * 50, surfaceY);
+                    ctx.quadraticCurveTo(
+                        canvas.width * 0.5, surfaceY - 20 - i * 3,
+                        canvas.width * 0.8 - i * 50, surfaceY
+                    );
+                    ctx.stroke();
+                }
+            } else if (surfaceType === 'water') {
+                // 水面
+                ctx.fillStyle = '#4a90e2';
+                ctx.beginPath();
+                ctx.moveTo(0, surfaceY);
+                for (let x = 0; x < canvas.width; x += 10) {
+                    const y = surfaceY + 3 * Math.sin((x + Date.now() * 0.001) * 0.02);
+                    ctx.lineTo(x, y);
+                }
+                ctx.lineTo(canvas.width, canvas.height);
+                ctx.lineTo(0, canvas.height);
+                ctx.closePath();
+                ctx.fill();
+            } else if (surfaceType === 'soil') {
+                // 土壤
+                ctx.fillStyle = '#a07850';
+                ctx.fillRect(0, surfaceY, canvas.width, canvas.height - surfaceY);
+                // 绘制湿润效果
+                wetness.draw(surfaceY);
+            }
+
+            // 更新和绘制涟漪
+            ripples = ripples.filter(ripple => {
+                const alive = ripple.update();
+                ripple.draw();
+                return alive;
+            });
+
+            // 合并水滴
+            for (let i = 0; i < drops.length; i++) {
+                for (let j = i + 1; j < drops.length; j++) {
+                    if (!drops[i].absorbed && !drops[j].absorbed && surfaceType === 'lotus') {
+                        drops[i].merge(drops[j]);
+                    }
+                }
+            }
+
+            // 更新和绘制水滴
+            drops = drops.filter(drop => {
+                drop.update(surfaceType);
+                drop.draw();
+                return !drop.absorbed;
+            });
+
+            requestAnimationFrame(animate);
+        }
+
+        // 重新初始化湿润度尺寸
+        window.addEventListener('resize', () => {
+            wetness = new Wetness(canvas.width, canvas.height - canvas.height * 0.6, 4);
+        });
+
+        // 开始动画
+        animate();
+    </script>
+</body>
+</html>
